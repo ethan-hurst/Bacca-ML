@@ -130,7 +130,6 @@ class DQNAgent:
         self.update_target_model()
 
     def _build_model(self):
-        with tf.device('/GPU:0'):
         # Neural Network for Deep-Q learning Model
         model = Sequential()
         model.add(Dense(128, input_dim=self.state_size, activation='relu'))
@@ -143,12 +142,12 @@ class DQNAgent:
         self.memory.append((state, action, reward, next_state, done))
 
     def act(self, state):
-        with tf.device('/GPU:0'):
         if np.random.rand() <= self.epsilon:
             # Softmax exploration for better action diversity
             action_probs = np.ones(self.action_size) / self.action_size
             return np.random.choice(self.action_size, p=action_probs)
-            return random.randrange(self.action_size)
+        act_values = self.model.predict(np.array([state]))
+        return np.argmax(act_values[0])
         act_values = self.model.predict(np.array([state]))
         return np.argmax(act_values[0])
 
@@ -157,15 +156,14 @@ class DQNAgent:
         self.target_model.set_weights(self.model.get_weights())
 
     def replay(self, batch_size):
-        with tf.device('/GPU:0'):
         minibatch = random.sample(self.memory, batch_size)
         for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                target = (reward + self.gamma * np.amax(self.target_model.predict(np.array([next_state]))[0]))
-            target_f = self.model.predict(np.array([state]))
-            target_f[0][action] = target
-            self.model.fit(np.array([state]), target_f, epochs=1, verbose=0)
+                target = reward
+                if not done:
+                                    target = (reward + self.gamma * np.amax(self.target_model.predict(np.array([next_state]))[0]))
+                target_f = self.model.predict(np.array([state]))
+                target_f[0][action] = target
+                self.model.fit(np.array([state]), target_f, epochs=1, verbose=0)
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
@@ -175,14 +173,12 @@ class DQNAgent:
 
 import pickle
 
-import tensorflow as tf
 import datetime
 
 # Set up TensorBoard
 log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 summary_writer = tf.summary.create_file_writer(log_dir)
 
-import tensorflow as tf.config
 
 # Limit GPU memory growth
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -190,7 +186,8 @@ if physical_devices:
     try:
         for device in physical_devices:
             tf.config.experimental.set_memory_growth(device, True)
-        print(f"Using GPU: {physical_devices}")
+        tf.config.set_visible_devices(physical_devices[0], 'GPU')
+        print(f"Using GPU: {physical_devices[0]}")
     except RuntimeError as e:
         print(e)
 
@@ -227,8 +224,8 @@ for e in range(episodes):
         # Normalize the reward
         reward = (reward - np.mean(rewards_per_episode)) / (np.std(rewards_per_episode) + 1e-10)
     # Replay the experience with a batch size of 32
-    if len(agent.memory) > 32:
-        agent.replay(32)
+    if len(agent.memory) > 64:
+        agent.replay(64)
 
     profits_per_episode.append(total_profit)
     rewards_per_episode.append(total_reward)
