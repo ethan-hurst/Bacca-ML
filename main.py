@@ -119,19 +119,22 @@ class DQNAgent:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = deque(maxlen=2000)
+        self.memory = deque(maxlen=5000)
         self.gamma = 0.99  # Discount rate
         self.epsilon = 1.0  # Exploration rate
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.990
         self.learning_rate = 0.0001
         self.model = self._build_model()
+        self.target_model = self._build_model()
+        self.update_target_model()
 
     def _build_model(self):
+        with tf.device('/GPU:0'):
         # Neural Network for Deep-Q learning Model
         model = Sequential()
-        model.add(Dense(64, input_dim=self.state_size, activation='relu'))
-        model.add(Dense(64, activation='relu'))
+        model.add(Dense(128, input_dim=self.state_size, activation='relu'))
+        model.add(Dense(128, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate), loss='mse')
         return model
@@ -140,22 +143,56 @@ class DQNAgent:
         self.memory.append((state, action, reward, next_state, done))
 
     def act(self, state):
+        with tf.device('/GPU:0'):
         if np.random.rand() <= self.epsilon:
+            # Softmax exploration for better action diversity
+            action_probs = np.ones(self.action_size) / self.action_size
+            return np.random.choice(self.action_size, p=action_probs)
             return random.randrange(self.action_size)
         act_values = self.model.predict(np.array([state]))
         return np.argmax(act_values[0])
 
+    def update_target_model(self):
+        # Copy weights from model to target_model
+        self.target_model.set_weights(self.model.get_weights())
+
     def replay(self, batch_size):
+        with tf.device('/GPU:0'):
         minibatch = random.sample(self.memory, batch_size)
         for state, action, reward, next_state, done in minibatch:
             target = reward
             if not done:
-                target = (reward + self.gamma * np.amax(self.model.predict(np.array([next_state]))[0]))
+                target = (reward + self.gamma * np.amax(self.target_model.predict(np.array([next_state]))[0]))
             target_f = self.model.predict(np.array([state]))
             target_f[0][action] = target
             self.model.fit(np.array([state]), target_f, epochs=1, verbose=0)
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+
+        # Periodically update the target model
+        if batch_size % 10 == 0:
+            self.update_target_model()
+
+import pickle
+
+import tensorflow as tf
+import datetime
+
+# Set up TensorBoard
+log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+summary_writer = tf.summary.create_file_writer(log_dir)
+
+import tensorflow as tf.config
+
+# Limit GPU memory growth
+physical_devices = tf.config.list_physical_devices('GPU')
+if physical_devices:
+    try:
+        for device in physical_devices:
+            tf.config.experimental.set_memory_growth(device, True)
+        print(f"Using GPU: {physical_devices}")
+    except RuntimeError as e:
+        print(e)
 
 # Main reinforcement learning loop
 profits_per_episode = []
@@ -165,7 +202,14 @@ state_size = len(env._get_state())
 action_size = 3  # Bet on Banker, Player, or Tie
 agent = DQNAgent(state_size, action_size)
 population_size = 50
-episodes = 5000
+episodes = 1000
+
+# Load model weights if available before starting training
+try:
+    agent.model.load_weights('baccarat_dqn_weights.weights.h5')
+    print('Loaded saved weights successfully.')
+except FileNotFoundError:
+    print('No saved weights found, starting fresh.')
 
 for e in range(episodes):
     state = env.reset()
@@ -174,20 +218,36 @@ for e in range(episodes):
     total_reward = 0
     while not done and env.balance < 10 * env.initial_balance:
         action = agent.act(state)
-        bet_size = random.randint(1, 100)  # For simplicity, use a random bet size
+        bet_size = max(1, min(100, int(env.balance * (0.01 + 0.1 * np.random.rand()))))  # Adjust bet size based on balance and random exploration factor
         next_state, reward, done, _ = env.step(action, bet_size)
         agent.remember(state, action, reward, next_state, done)
         state = next_state
         total_profit += reward
         total_reward += reward
-
+        # Normalize the reward
+        reward = (reward - np.mean(rewards_per_episode)) / (np.std(rewards_per_episode) + 1e-10)
     # Replay the experience with a batch size of 32
     if len(agent.memory) > 32:
         agent.replay(32)
 
     profits_per_episode.append(total_profit)
     rewards_per_episode.append(total_reward)
+
+    # Log metrics to TensorBoard
+    with summary_writer.as_default():
+        tf.summary.scalar('Total Profit', total_profit, step=e)
+        tf.summary.scalar('Total Reward', total_reward, step=e)
+        tf.summary.scalar('Epsilon', agent.epsilon, step=e)
+    if (e + 1) % 100 == 0:
+        # Save model weights every 100 episodes
+        agent.update_target_model()  # Update target model
+        agent.model.save_weights('baccarat_dqn_weights.weights.h5')
+    
     print(f"Episode {e + 1}/{episodes}, Total Profit: {total_profit}, Total Reward: {total_reward}, Epsilon: {agent.epsilon:.2}")
+
+# Save training metrics at the end of training
+with open('training_metrics.pkl', 'wb') as f:
+    pickle.dump({'profits': profits_per_episode, 'rewards': rewards_per_episode}, f)
 
 # Plotting the results
 profits = [random.randint(-100, 100) for _ in range(episodes)]  # Replace with actual profit values
@@ -199,9 +259,4 @@ plt.ylabel('Amount')
 plt.title('Reinforcement Learning in Baccarat Game - Profit and Reward per Episode')
 plt.legend()
 plt.grid(True)
-plt.show()
-plt.xlabel('Episode')
-plt.ylabel('Profit')
-plt.title('Reinforcement Learning in Baccarat Game')
-plt.legend()
 plt.show()
