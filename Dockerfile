@@ -1,5 +1,5 @@
 # First stage: Use TensorFlow GPU image to get pre-installed TensorFlow
-FROM tensorflow/tensorflow:latest-gpu AS tensorflow-base
+FROM tensorflow/tensorflow:latest-gpu AS tensorflow-basepy  
 
 # Second stage: Use your own image to build the environment
 FROM python:3.11-slim AS baccarat-env

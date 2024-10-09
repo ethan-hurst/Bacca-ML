@@ -14,3 +14,36 @@ RUN python3 -m venv /app/venv --system-site-packages && \
 
 ## Activate the virtual environment
 source /app/venv/bin/activate
+
+
+## Ensure that tensorflow is accessible in the virtual environment
+docker run -it baccarat-ml /bin/bash
+source /app/venv/bin/activate
+python -c "import tensorflow as tf; print(tf.__version__)"
+
+## Set up NVIDIA Docker Repo
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID) && \
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add - && \
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+
+## install Nvidia toolkit 
+sudo apt-get update
+sudo apt-get install -y nvidia-docker2
+
+
+## Restart docker
+sudo systemctl restart docker
+
+## Verify NVIDIA driveres and CUDA are installed 
+nvidia-smi
+
+
+## Verify GPU access in container
+python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+
+## Verify CUDA libraries are installed 
+dpkg -l | grep cuda
+dpkg -l | grep cudnn
+
+## Run TensorBoard
+tensorboard --logdir logs/fit/ --port 6007
