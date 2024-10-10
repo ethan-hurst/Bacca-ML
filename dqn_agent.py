@@ -131,3 +131,10 @@ class DQNAgent:
         self.update_target_counter += 1
         if self.update_target_counter % 1000 == 0:
             self.update_target_model()
+
+    def save_weights(self, filepath):
+        self.model.save_weights(filepath)
+
+    def load_weights(self, filepath):
+        self.model.load_weights(filepath)
+        self.target_model.load_weights(filepath)

@@ -1,7 +1,8 @@
-# baccarat_env.py
+# bacca_env.py
 import random
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 
 class BaccaratEnv:
     def __init__(self, num_agents, initial_balance=100, history_length=100):
@@ -143,7 +144,8 @@ class BaccaratEnv:
 
     def run_parallel_steps(self, actions, bet_sizes):
         """Parallel processing of steps for improved performance."""
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        num_workers = min(multiprocessing.cpu_count(), self.num_agents)  # Scale workers to available CPUs
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
             results = list(executor.map(self._process_single_step, range(self.num_agents), actions, bet_sizes))
         states, rewards = zip(*results)
         return np.array(states), list(rewards), self.current_position >= self.cut_card_position, {}
@@ -182,3 +184,15 @@ class BaccaratEnv:
                         banker_hand.append(self._draw_card())
 
         player_value = self._calculate_hand_value(player_hand)
+        banker_value = self._calculate_hand_value(banker_hand)
+
+        outcome = 'Tie'
+        if player_value > banker_value:
+            outcome = 'Player'
+        elif banker_value > player_value:
+            outcome = 'Banker'
+
+        outcome_encoding = {'Player': 0, 'Banker': 1, 'Tie': 2}
+        self.outcome_history.append(outcome_encoding[outcome])
+
+        reward = 0
