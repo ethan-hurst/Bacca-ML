@@ -6,7 +6,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from datetime import datetime
 import tensorflow as tf
-from bacca_env import BaccaEnv
+from baccarat_env import BaccaratEnv
 from dqn_agent import DQNAgent
 from genetic_algorithm import create_new_agents
 
@@ -20,7 +20,8 @@ state_size = 2 + history_length
 action_size = 3
 population_size = 100
 generations = 250
-shoes_per_generation = 1
+shoes_per_generation = 5
+episodes_per_agent = 1000
 
 # Initialize agents
 agents = []
@@ -37,7 +38,7 @@ for idx in tqdm(range(population_size), desc="Loading Agents"):
     agents.append(agent)
 
 # Initialize the shared environment
-env = BaccaEnv(num_agents=population_size, history_length=history_length)
+env = BaccaratEnv(num_agents=population_size, history_length=history_length)
 
 # Initialize a list to store aggregate profits
 aggregate_profits = []
@@ -50,10 +51,8 @@ try:
     for generation in range(generations):
         print(f"\n--- Starting Generation {generation + 1}/{generations} ---\n")
 
-        # Ensure balances are not reset between shoes
-        for shoe_number in range(shoes_per_generation):
-            print(f"--- Starting Shoe {shoe_number + 1}/{shoes_per_generation} in Generation {generation + 1} ---")
-
+        # Training Phase: Run episodes for each agent
+        for episode in range(episodes_per_agent):
             states = env.reset(reset_balances=False)
             done = False
             while not done:
@@ -77,16 +76,41 @@ try:
                     reward = rewards[idx]
                     next_state = next_states[idx]
                     agent.remember(state, action, reward, next_state, done)
-                    if len(agent.memory) >= 256 and random.random() < 0.1:
-                        agent.replay(64)
 
                 states = next_states
 
-            print(f"Completed Shoe {shoe_number + 1} in Generation {generation + 1}")
+            # Replay experience after each episode for each agent
+            for agent in agents:
+                if len(agent.memory) >= 256:
+                    agent.replay(64)
 
+        # Evaluation Phase: Run generational learning
         alive_agents = []
         bankrupt_count = 0
         survivor_profits = []
+
+        for shoe_number in range(shoes_per_generation):
+            print(f"--- Starting Shoe {shoe_number + 1}/{shoes_per_generation} in Generation {generation + 1} ---")
+
+            states = env.reset(reset_balances=False)
+            done = False
+            while not done:
+                actions = []
+                bet_sizes = []
+                for idx, agent in enumerate(agents):
+                    state = states[idx]
+                    if env.balances[idx] >= min(env.allowed_bet_units):
+                        action, bet_size = agent.act(state, env.balances[idx], env.sit_out_counts[idx])
+                    else:
+                        action = 0  # Default action
+                        bet_size = 0
+                    actions.append(action)
+                    bet_sizes.append(bet_size)
+
+                next_states, rewards, done, _ = env.step(actions, bet_sizes)
+                states = next_states
+
+            print(f"Completed Shoe {shoe_number + 1} in Generation {generation + 1}")
 
         for idx, agent in enumerate(agents):
             final_balance = env.balances[idx]
@@ -107,17 +131,6 @@ try:
             min_profit = min(survivor_profits)
             average_profit = total_profit / len(survivor_profits)
             print(f"Generation {generation + 1} Survivors' Profits:")
-            # Print the top 5 performers
-            top_performers = sorted(alive_agents, key=lambda x: ((x[2] - (env.initial_balance if survival_streaks[x[0]] == 0 else env.balances[x[0]])) / (env.initial_balance if survival_streaks[x[0]] == 0 else env.balances[x[0]])) * 100, reverse=True)[:5]
-            print("Top 5 Performers:")
-            for rank, (idx, _, final_balance) in enumerate(top_performers, start=1):
-                # Intra-generational percentage gain
-                previous_balance = env.balances[idx] if survival_streaks[idx] > 0 else env.initial_balance
-                intra_gen_percentage_change = ((final_balance - previous_balance) / previous_balance) * 100 if previous_balance != 0 else 0
-                # Total percentage gain
-                total_percentage_change = ((final_balance - env.initial_balance) / env.initial_balance) * 100 if env.initial_balance != 0 else 0
-                survival_streaks[idx] += 1
-                print(f"Rank {rank}: Agent {idx + 1} with Balance = {final_balance:.2f}, Intra-Generational Percentage Change = {intra_gen_percentage_change:.2f}%, Total Percentage Change = {total_percentage_change:.2f}%")
             print(f"Total Profit: {total_profit:.2f}")
             print(f"Max Profit: {max_profit:.2f}")
             print(f"Min Profit: {min_profit:.2f}")
@@ -127,8 +140,14 @@ try:
             print("No survivors in this generation.")
             aggregate_profits.append(0)
 
-        
-        
+        alive_agents.sort(key=lambda x: x[2], reverse=True)
+
+        # Update survival streaks for alive agents
+        for idx, agent, final_balance in alive_agents:
+            previous_balance = env.initial_balance if survival_streaks[idx] == 0 else env.balances[idx]
+            percentage_change = ((final_balance - previous_balance) / previous_balance) * 100
+            survival_streaks[idx] += 1
+            print(f"Agent {idx + 1}: Balance = {final_balance:.2f}, Percentage Change = {percentage_change:.2f}%, Streak = {survival_streaks[idx]}")
 
         with summary_writer.as_default():
             tf.summary.scalar('Total Profit', total_profit, step=generation+1)
@@ -144,8 +163,7 @@ try:
             num_new_agents = population_size - len(alive_agents)
             new_agents = create_new_agents(alive_agents, num_new_agents, state_size, action_size, DQNAgent)
             agents = [agent for _, agent, _ in alive_agents] + new_agents
-            # Only set initial balance for new agents
-            env.balances = [final_balance if idx in [agent[0] for agent in alive_agents] else env.initial_balance for idx, final_balance in enumerate(env.balances)]
+            env.balances = [env.initial_balance] * population_size
 
         for idx, agent in enumerate(tqdm(agents, desc="Saving Agents")):
             weights_file = os.path.join(weights_dir, f'agent_{idx}.weights.h5')
