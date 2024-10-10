@@ -6,7 +6,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from datetime import datetime
 import tensorflow as tf
-from baccarat_env import BaccaratEnv
+from bacca_env import BaccaratEnv
 from dqn_agent import DQNAgent
 from genetic_algorithm import create_new_agents
 from concurrent.futures import ThreadPoolExecutor
