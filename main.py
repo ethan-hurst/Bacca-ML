@@ -9,6 +9,7 @@ import tensorflow as tf
 from baccarat_env import BaccaratEnv
 from dqn_agent import DQNAgent
 from genetic_algorithm import create_new_agents
+from concurrent.futures import ThreadPoolExecutor
 
 # Create the weights directory if it doesn't exist
 weights_dir = 'weights'
@@ -22,6 +23,7 @@ population_size = 100
 generations = 250
 shoes_per_generation = 5
 episodes_per_agent = 1000
+batch_size = 64
 
 # Initialize agents
 agents = []
@@ -52,37 +54,41 @@ try:
         print(f"\n--- Starting Generation {generation + 1}/{generations} ---\n")
 
         # Training Phase: Run episodes for each agent
-        for episode in range(episodes_per_agent):
-            states = env.reset(reset_balances=False)
-            done = False
-            while not done:
-                actions = []
-                bet_sizes = []
-                for idx, agent in enumerate(agents):
-                    state = states[idx]
-                    if env.balances[idx] >= min(env.allowed_bet_units):
-                        action, bet_size = agent.act(state, env.balances[idx], env.sit_out_counts[idx])
-                    else:
-                        action = 0  # Default action
-                        bet_size = 0
-                    actions.append(action)
-                    bet_sizes.append(bet_size)
+        def train_agent(agent, episodes):
+            for _ in range(episodes):
+                states = env.reset(reset_balances=False)
+                done = False
+                while not done:
+                    actions = []
+                    bet_sizes = []
+                    for idx, agent in enumerate(agents):
+                        state = states[idx]
+                        if env.balances[idx] >= min(env.allowed_bet_units):
+                            action, bet_size = agent.act(state, env.balances[idx], env.sit_out_counts[idx])
+                        else:
+                            action = 0  # Default action
+                            bet_size = 0
+                        actions.append(action)
+                        bet_sizes.append(bet_size)
 
-                next_states, rewards, done, _ = env.step(actions, bet_sizes)
+                    next_states, rewards, done, _ = env.step(actions, bet_sizes)
 
-                for idx, agent in enumerate(agents):
-                    state = states[idx]
-                    action = actions[idx]
-                    reward = rewards[idx]
-                    next_state = next_states[idx]
-                    agent.remember(state, action, reward, next_state, done)
+                    for idx, agent in enumerate(agents):
+                        state = states[idx]
+                        action = actions[idx]
+                        reward = rewards[idx]
+                        next_state = next_states[idx]
+                        agent.remember(state, action, reward, next_state, done)
 
-                states = next_states
+                    states = next_states
 
-            # Replay experience after each episode for each agent
-            for agent in agents:
-                if len(agent.memory) >= 256:
-                    agent.replay(64)
+                # Replay experience after each episode
+                if len(agent.memory) >= batch_size:
+                    agent.replay(batch_size)
+
+        # Use ThreadPoolExecutor to train agents in parallel
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            executor.map(lambda agent: train_agent(agent, episodes_per_agent // population_size), agents)
 
         # Evaluation Phase: Run generational learning
         alive_agents = []
